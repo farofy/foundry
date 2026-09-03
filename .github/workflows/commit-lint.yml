@@ -1,0 +1,71 @@
+name: commit-lint
+
+# Enforce the commit standard server side. The local hook can be skipped with
+# --no-verify and does not run for commits made through the web UI, so the
+# rules are enforced here as well.
+#
+# It reuses scripts/git-hooks/commit-msg as the single source of truth, so the
+# local rules and the CI rules cannot drift apart.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Both jobs only read the checkout and the commit log.
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    name: hook self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: sh tests/commit-msg.test.sh
+
+  # Pull requests only. From two commits a squash takes its subject from the
+  # pull request title, which is not a Conventional Commit, and a one-commit
+  # squash gains a ` (#<pr>)` suffix that can push it past the length limit.
+  commits:
+    name: validate commit messages
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -e
+          # On a pull request the checkout is refs/pull/N/merge, whose first
+          # parent is the base and whose second is the pull request head. The
+          # first-parent range is therefore exactly the commits under review,
+          # and it stays correct when the base branch is force-pushed. Fall
+          # back to the base branch when the checkout is not that merge.
+          if git rev-parse -q --verify HEAD^2 >/dev/null; then
+            shas=$(git rev-list --no-merges HEAD^1..HEAD)
+          else
+            git fetch --no-tags origin "$BASE_REF"
+            shas=$(git rev-list --no-merges "origin/$BASE_REF..HEAD")
+          fi
+          if [ -z "$shas" ]; then
+            echo "No non-merge commits in range, nothing to validate."
+            exit 0
+          fi
+          tmp=$(mktemp)
+          failed=0
+          for sha in $shas; do
+            git log -1 --format=%B "$sha" > "$tmp"
+            if sh scripts/git-hooks/commit-msg "$tmp"; then
+              echo "  ok    $(git log -1 --format='%h %s' "$sha")"
+            else
+              echo "  FAIL  $(git log -1 --format='%h %s' "$sha")"
+              failed=1
+            fi
+          done
+          rm -f "$tmp"
+          exit "$failed"
