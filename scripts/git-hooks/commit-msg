@@ -1,0 +1,124 @@
+#!/bin/sh
+# Enforce a commit standard stricter than Conventional Commits: a scope is
+# required, the subject does not end with a period, and it has a length limit.
+# Activated by pointing git at this directory:
+#   git config core.hooksPath scripts/git-hooks
+# Merge, revert, reapply, fixup, squash and amend commits are skipped.
+
+# Fix the locale so the character classes below behave the same on every
+# machine. Under C they match ASCII only.
+export LC_ALL=C
+
+MAX_LEN=72
+TARGET_LEN=50
+# The type list is the @commitlint/config-conventional set. `infra` is not in
+# that set and is not accepted here either.
+TYPES='feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert'
+
+# Print a rejection, then any detail lines indented, and stop the commit.
+fail() {
+  echo "" >&2
+  echo "✗ Commit rejected: $1" >&2
+  shift
+  if [ $# -gt 0 ]; then
+    echo "" >&2
+    for line in "$@"; do echo "  $line" >&2; done
+  fi
+  echo "" >&2
+  exit 1
+}
+
+# The subject is the first line that holds text. Reading it this way keeps a
+# leading blank line from hiding the subject, which --cleanup=verbatim allows.
+# Trailing blanks and a CR from a Windows editor are removed for the same
+# reason.
+subject_no=$(awk 'NF { print NR; exit }' "$1")
+header=$(awk 'NF { print; exit }' "$1" | sed -E 's/[[:space:]]+$//')
+
+# A message with no line of text is git's own error to report, not this
+# hook's.
+[ -n "$header" ] || exit 0
+
+# Subjects git composes itself. Git quotes the merged name, so requiring the
+# quote keeps ordinary prose that starts with the same words under check.
+case "$header" in
+  "Merge branch '"*|"Merge branches '"*|"Merge commit '"*) exit 0 ;;
+  "Merge remote-tracking branch '"*|"Merge tag '"*) exit 0 ;;
+  'Merge pull request #'*|fixup!*|squash!*|amend!*) exit 0 ;;
+  'Revert "'*|'Reapply "'*) exit 0 ;;
+esac
+
+if ! printf '%s' "$header" | grep -Eq "^($TYPES)\([a-z0-9._/-]+\)!?: [^[:space:]]"; then
+  fail "not a valid Conventional Commit." \
+    "Received : $header" \
+    "Expected : <type>(<scope>): <description>   (scope REQUIRED)" \
+    "Valid types: $(echo "$TYPES" | tr '|' ' ')" \
+    "Example: feat(auth): add refresh token rotation"
+fi
+
+desc=$(printf '%s' "$header" | sed -E "s/^($TYPES)\([a-z0-9._/-]+\)!?: //")
+# Only the first character is checked, which is what config-conventional's
+# subject-case rule forbids. Acronyms and ticket ids stay usable. A capital
+# outside ASCII is not detected, because the locale is fixed to C.
+case "$desc" in
+  [A-Z]*)
+    # A description with no lowercase letter is all caps, so lower all of it.
+    # Otherwise only the first character is wrong.
+    if printf '%s' "$desc" | grep -q '[a-z]'; then
+      fixed="$(printf '%s' "$desc" | cut -c1 | tr '[:upper:]' '[:lower:]')$(printf '%s' "$desc" | cut -c2-)"
+    else
+      fixed=$(printf '%s' "$desc" | tr '[:upper:]' '[:lower:]')
+    fi
+    fail "the subject must not start with a capital." \
+      "Received : $header" \
+      "Fix to   : ${header%"$desc"}$fixed"
+    ;;
+esac
+
+case "$desc" in
+  *.)
+    trimmed=${header%"${header##*[!.]}"}
+    # A description of nothing but periods trims back to the type and scope,
+    # which is not a subject, so no fix is offered for it.
+    case "$trimmed" in
+      *": ") fail "the subject must not end with a period." "Received : $header" ;;
+      *) fail "the subject must not end with a period." \
+           "Received : $header" "Fix to   : $trimmed" ;;
+    esac
+    ;;
+esac
+
+# Count characters, not bytes. Dropping UTF-8 continuation bytes leaves one
+# byte per character, because every character keeps its lead byte. This gives
+# the same number in every locale, which `wc -m` does not.
+len=$(printf '%s' "$header" | tr -d '\200-\277' | wc -c | tr -d ' ')
+if [ "$len" -gt "$MAX_LEN" ]; then
+  fail "subject is $len characters, limit is $MAX_LEN." "$header"
+fi
+
+# Over the target the hook warns but still lets the commit through.
+if [ "$len" -gt "$TARGET_LEN" ]; then
+  echo "" >&2
+  echo "→ Subject is $len characters. Aim for $TARGET_LEN or fewer. $MAX_LEN is the hard limit." >&2
+  echo "  $header" >&2
+  echo "" >&2
+fi
+
+# A body must be separated from the subject by a blank line. Without it git
+# joins the lines and the whole run becomes the subject.
+if [ -n "$(awk -v n="$subject_no" 'NR == n + 1 && NF { print }' "$1")" ]; then
+  fail "leave a blank line between subject and body."
+fi
+
+# Footer: a co-author trailer must use one of the two spellings in common
+# use. `Co-authored-by` is git's own form and `Co-Authored-By` is what some
+# tools write. Other spellings are rejected to keep the history consistent.
+bad=$(grep -iE '^co-authored-by:' "$1" \
+  | grep -vE '^(Co-authored-by|Co-Authored-By):' | head -n1)
+if [ -n "$bad" ]; then
+  fail "co-author trailer must read 'Co-authored-by:' or 'Co-Authored-By:'." \
+    "Received : $bad" \
+    "Fix to   : Co-authored-by:${bad#*:}"
+fi
+
+exit 0
