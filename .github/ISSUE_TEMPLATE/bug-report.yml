@@ -1,0 +1,40 @@
+name: Bug report
+description: Something behaves differently from what is expected
+labels: ["type: bug", "needs triage"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. git commit -m "feat(setup): add x"
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 15, Windows 11, Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Git and shell versions
+      description: Output of `git --version` and `echo $SHELL`.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Command output
+      description: Paste the full output. It is rendered as code.
+      render: shell
