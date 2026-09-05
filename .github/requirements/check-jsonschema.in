@@ -1,0 +1,3 @@
+# Tools the lint workflow installs. Versions are resolved into
+# check-jsonschema.txt, which is the file the workflow reads.
+check-jsonschema
