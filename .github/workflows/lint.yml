@@ -1,0 +1,120 @@
+name: lint
+
+# Static analysis for the files CI can check without running them. The commit
+# standard has its own workflow; this one covers the shell scripts, the
+# workflows themselves and the issue forms.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push makes the run in flight redundant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every job only reads the checkout.
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Each job below runs code from outside this repository. Leaving the
+          # token out of .git/config keeps it out of their reach.
+          persist-credentials: false
+
+      - name: Check shell scripts
+        run: |
+          set -e
+          # Files are found by shebang, not by extension. The hook is named
+          # commit-msg with no suffix, so a *.sh glob would miss it. The `if`
+          # keeps the loop status at 0 when the last file is not a script.
+          files=$(git ls-files | while IFS= read -r f; do
+            if head -n 1 "$f" \
+              | grep -qE '^#!.*(bin/|env )(sh|bash|dash|ksh)([[:space:]]|$)'
+            then
+              printf '%s\n' "$f"
+            fi
+          done)
+          if [ -z "$files" ]; then
+            echo "No shell script found. Discovery is broken."
+            exit 1
+          fi
+          echo "Checking:"
+          echo "$files"
+          # The runner image ships shellcheck. It reads each shebang, so the
+          # dialect is not forced here.
+          echo "$files" | xargs shellcheck
+
+  workflows:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint
+        run: |
+          set -e
+          # The upstream release is fetched and checked against a pinned
+          # digest. A third-party wrapper action would widen the trusted set
+          # for no gain.
+          file="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$file" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${file}"
+          echo "${ACTIONLINT_SHA256}  ${file}" | sha256sum -c -
+          tar -xzf "$file" actionlint
+
+      - name: Check workflows
+        run: ./actionlint
+
+  issue-forms:
+    name: issue templates
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # SchemaStore publishes the schemas GitHub's own format follows, and
+      # check-jsonschema vendors them. Validating against those covers the
+      # whole format instead of the parts a hand-written check remembers.
+      CHECK_JSONSCHEMA_VERSION: 0.38.0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install check-jsonschema
+        # Wheels only. A source distribution would execute its own build code
+        # during the install, which is the pip equivalent of a lifecycle
+        # script.
+        run: |
+          pip install --only-binary=:all: --disable-pip-version-check \
+            "check-jsonschema==${CHECK_JSONSCHEMA_VERSION}"
+
+      - name: Check issue forms
+        run: |
+          set -e
+          # Every file in the directory is a form except the chooser
+          # configuration, which follows a schema of its own.
+          forms=$(find .github/ISSUE_TEMPLATE \
+            \( -name '*.yml' -o -name '*.yaml' \) ! -name 'config.yml')
+          if [ -z "$forms" ]; then
+            echo "No issue form found. Discovery is broken."
+            exit 1
+          fi
+          echo "$forms"
+          # shellcheck disable=SC2086
+          check-jsonschema --builtin-schema vendor.github-issue-forms $forms
+          check-jsonschema --builtin-schema vendor.github-issue-config \
+            .github/ISSUE_TEMPLATE/config.yml
