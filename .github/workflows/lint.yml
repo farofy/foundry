@@ -34,11 +34,12 @@ jobs:
         run: |
           set -e
           # Files are found by shebang, not by extension. The hook is named
-          # commit-msg with no suffix, so a *.sh glob would miss it. The `if`
-          # keeps the loop status at 0 when the last file is not a script.
+          # commit-msg with no suffix, so a *.sh glob would miss it. The name
+          # is matched after a slash or a space, so `env -S bash` counts too.
+          # The `if` keeps the loop status at 0 when a file is not a script.
           files=$(git ls-files | while IFS= read -r f; do
             if head -n 1 "$f" \
-              | grep -qE '^#!.*(bin/|env )(sh|bash|dash|ksh)([[:space:]]|$)'
+              | grep -qE '^#!.*[/ ](sh|bash|dash|ksh)([[:space:]]|$)'
             then
               printf '%s\n' "$f"
             fi
@@ -50,8 +51,9 @@ jobs:
           echo "Checking:"
           echo "$files"
           # The runner image ships shellcheck. It reads each shebang, so the
-          # dialect is not forced here.
-          echo "$files" | xargs shellcheck
+          # dialect is not forced here. xargs splits on newlines alone,
+          # because the loop above already kept spaces in a path intact.
+          echo "$files" | xargs -d '\n' shellcheck
 
   workflows:
     name: actionlint
@@ -95,9 +97,10 @@ jobs:
           persist-credentials: false
 
       - name: Install check-jsonschema
-        # Wheels only. A source distribution would execute its own build code
+        # Wheels only. A source distribution would run its own build code
         # during the install, which is the pip equivalent of a lifecycle
-        # script.
+        # script. The pin reaches this package alone; pip resolves the
+        # dependencies at install time, unlike the actionlint digest above.
         run: |
           pip install --only-binary=:all: --disable-pip-version-check \
             "check-jsonschema==${CHECK_JSONSCHEMA_VERSION}"
@@ -107,14 +110,17 @@ jobs:
           set -e
           # Every file in the directory is a form except the chooser
           # configuration, which follows a schema of its own.
-          forms=$(find .github/ISSUE_TEMPLATE \
+          # -maxdepth 1 because GitHub reads this directory only. A file
+          # in a subdirectory is not a form and would fail the schema.
+          forms=$(find .github/ISSUE_TEMPLATE -maxdepth 1 \
             \( -name '*.yml' -o -name '*.yaml' \) ! -name 'config.yml')
           if [ -z "$forms" ]; then
             echo "No issue form found. Discovery is broken."
             exit 1
           fi
           echo "$forms"
-          # shellcheck disable=SC2086
-          check-jsonschema --builtin-schema vendor.github-issue-forms $forms
+          echo "$forms" \
+            | xargs -d '\n' check-jsonschema \
+                --builtin-schema vendor.github-issue-forms
           check-jsonschema --builtin-schema vendor.github-issue-config \
             .github/ISSUE_TEMPLATE/config.yml
