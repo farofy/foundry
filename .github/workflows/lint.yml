@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Each job below runs code from outside this repository. Leaving the
           # token out of .git/config keeps it out of their reach.
@@ -63,7 +63,7 @@ jobs:
       ACTIONLINT_VERSION: 1.7.12
       ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -82,28 +82,23 @@ jobs:
       - name: Check workflows
         run: ./actionlint
 
-  issue-forms:
-    name: issue templates
+  # SchemaStore schemas cover the whole format, not the parts a
+  # hand-written check would catch.
+  github-config:
+    name: github config
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      # SchemaStore publishes the schemas GitHub's own format follows, and
-      # check-jsonschema vendors them. Validating against those covers the
-      # whole format instead of the parts a hand-written check remembers.
-      CHECK_JSONSCHEMA_VERSION: 0.38.0
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install check-jsonschema
-        # Wheels only. A source distribution would run its own build code
-        # during the install, which is the pip equivalent of a lifecycle
-        # script. The pin reaches this package alone; pip resolves the
-        # dependencies at install time, unlike the actionlint digest above.
+        # Hash-pinned, so the whole tree is fixed. Wheels only: a source
+        # distribution would run build code during the install.
         run: |
           pip install --only-binary=:all: --disable-pip-version-check \
-            "check-jsonschema==${CHECK_JSONSCHEMA_VERSION}"
+            --require-hashes -r .github/requirements/check-jsonschema.txt
 
       - name: Check issue forms
         run: |
@@ -124,3 +119,8 @@ jobs:
                 --builtin-schema vendor.github-issue-forms
           check-jsonschema --builtin-schema vendor.github-issue-config \
             .github/ISSUE_TEMPLATE/config.yml
+
+      - name: Check dependabot configuration
+        run: |
+          check-jsonschema --builtin-schema vendor.dependabot \
+            .github/dependabot.yml
